@@ -403,6 +403,47 @@ int warnif_tcp_http_cond(const struct proxy *px, const struct acl_cond *cond)
 	return 0;
 }
 
+/* Report it if an ACL uses L6 sample fetch when all listeners or servers are
+ * using SSL. It returns either 0 or ERR_WARN so that its result can be or'ed
+ * with err_code.
+*/
+
+int warnif_raw_ssl_cond(const struct proxy *px, const struct acl_cond *cond)
+{
+	int code = 0;
+	struct bind_conf *bind_conf;
+	struct server *iterator;
+
+	if (!cond)
+		return 0;
+
+	if (cond->use & SMP_USE_L6REQ)
+	{
+		list_for_each_entry(bind_conf, &px->conf.bind, by_fe) {
+			if (bind_conf->is_ssl)
+			{
+				ha_warning("Proxy '%s': L6 sample fetches will not work on SSL proxies (declared at %s:%d).\n",
+					px->id, cond->file, cond->line);
+				code = ERR_WARN;
+			}
+		}
+	}
+
+	if (cond->use & SMP_USE_L6RES)
+	{
+		for (iterator = px->srv; iterator; iterator = iterator->next) {
+			if (iterator->use_ssl > 0)
+			{
+				ha_warning("Proxy '%s': L6 sample fetches will not work on SSL servers (declared at %s:%d).\n",
+					px->id, cond->file, cond->line);
+				code = ERR_WARN;
+			}
+		}
+	}
+
+	return code;
+}
+
 /* try to find in <list> the word that looks closest to <word> by counting
  * transitions between letters, digits and other characters. Will return the
  * best matching word if found, otherwise NULL. An optional array of extra
@@ -2948,6 +2989,7 @@ int check_config_validity()
 				rule->be.backend = target;
 			}
 			err_code |= warnif_tcp_http_cond(curproxy, rule->cond);
+			err_code |= warnif_raw_ssl_cond(curproxy, rule->cond);
 		}
 
 		/* find the target server for 'use_server' rules */
@@ -2991,6 +3033,7 @@ int check_config_validity()
 			srule->srv.name = server_name;
 			target = findserver(curproxy, srule->srv.name);
 			err_code |= warnif_tcp_http_cond(curproxy, srule->cond);
+			err_code |= warnif_raw_ssl_cond(curproxy, srule->cond);
 
 			if (!target) {
 				ha_alert("%s '%s' : unable to find server '%s' referenced in a 'use-server' rule.\n",
@@ -3037,6 +3080,7 @@ int check_config_validity()
 				}
 			}
 			err_code |= warnif_tcp_http_cond(curproxy, mrule->cond);
+			err_code |= warnif_raw_ssl_cond(curproxy, mrule->cond);
 		}
 
 		/* find the target table for 'store response' rules */
